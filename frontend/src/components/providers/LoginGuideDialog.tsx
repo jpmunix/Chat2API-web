@@ -19,6 +19,7 @@ import kimiIcon from '@/assets/providers/kimi.svg'
 import minimaxIcon from '@/assets/providers/minimax.svg'
 import qwenIcon from '@/assets/providers/qwen.svg'
 import zaiIcon from '@/assets/providers/zai.svg'
+import veniceIcon from '@/assets/providers/venice.png'
 
 const providerIcons: Record<string, string> = {
   deepseek: deepseekIcon,
@@ -27,6 +28,7 @@ const providerIcons: Record<string, string> = {
   minimax: minimaxIcon,
   qwen: qwenIcon,
   'qwen-ai': qwenIcon,
+  venice: veniceIcon,
   zai: zaiIcon,
 }
 

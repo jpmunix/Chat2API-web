@@ -5,7 +5,7 @@
 
 import axios, { AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios'
 import http2 from 'http2'
-import { PassThrough } from 'stream'
+import { PassThrough, Readable } from 'stream'
 import { Account, Provider } from '../store/types'
 import { ForwardResult, ChatCompletionRequest, ProxyContext } from './types'
 import { proxyStatusManager } from './status'
@@ -21,6 +21,7 @@ import { ZaiAdapter, ZaiStreamHandler } from './adapters/zai'
 import { MiniMaxAdapter, MiniMaxStreamHandler } from './adapters/minimax'
 import { PerplexityAdapter } from './adapters/perplexity'
 import { PerplexityStreamHandler } from './adapters/perplexity-stream'
+import { VeniceAdapter, VeniceStreamHandler } from './adapters/venice'
 import { ToolCallingEngine } from './toolCalling/ToolCallingEngine'
 import type { ToolCallingTransformResult } from './toolCalling/types'
 import { sessionManager } from './sessionManager'
@@ -110,6 +111,12 @@ export class RequestForwarder {
       matches: PerplexityAdapter.isPerplexityProvider,
       forward: (request, account, provider, actualModel, startTime) =>
         this.forwardPerplexity(request, account, provider, actualModel, startTime),
+    },
+    {
+      name: 'venice',
+      matches: VeniceAdapter.isVeniceProvider,
+      forward: (request, account, provider, actualModel, startTime) =>
+        this.forwardVenice(request, account, provider, actualModel, startTime),
     },
   ]
 
@@ -1493,6 +1500,234 @@ export class RequestForwarder {
     }
 
     return `HTTP ${response.status}`
+  }
+
+  /**
+   * Venice Dedicated Forward
+   * Uses Venice web interface API (outerface.venice.ai)
+   */
+  private async forwardVenice(
+    request: ChatCompletionRequest,
+    account: Account,
+    provider: Provider,
+    actualModel: string,
+    startTime: number
+  ): Promise<ForwardResult> {
+    try {
+      const transformed = this.transformRequestForPromptToolUse(request, provider)
+      const transformedRequest = {
+        ...request,
+        messages: transformed.messages,
+        tools: transformed.tools,
+      }
+
+      const adapter = new VeniceAdapter(provider, account)
+
+      const { response, stream } = await adapter.chatCompletion({
+        model: actualModel,
+        originalModel: request.model,
+        messages: transformedRequest.messages as any,
+        stream: transformedRequest.stream,
+        temperature: transformedRequest.temperature,
+        top_p: transformedRequest.top_p,
+        reasoning_effort: transformedRequest.reasoning_effort,
+      })
+
+      const latency = Date.now() - startTime
+
+      if (response.status >= 400) {
+        let errorMessage = `HTTP ${response.status}`
+        if (response.data) {
+          let errorBody = ''
+          for await (const chunk of response.data) {
+            errorBody += chunk.toString()
+          }
+          try {
+            const parsed = JSON.parse(errorBody)
+            errorMessage = parsed.message || parsed.error?.message || errorBody
+          } catch {
+            errorMessage = errorBody
+          }
+        }
+        return {
+          success: false,
+          status: response.status,
+          error: errorMessage,
+          latency,
+        }
+      }
+
+      if (request.stream) {
+        const deleteSessionCallback = shouldDeleteSession()
+          ? async () => {
+              // No session to delete for Venice
+            }
+          : undefined
+
+        const handler = new VeniceStreamHandler(actualModel)
+        const transformedStream = await this.handleVeniceStream(stream, handler)
+
+        // Wrap stream to detect ban signature
+        const banWatchStream = new PassThrough()
+        let streamHasContent = false
+
+        transformedStream.on('data', (chunk: Buffer) => {
+          const str = chunk.toString()
+          // Any SSE chunk with non-empty delta content counts as real content
+          if (!streamHasContent && str.includes('"content":"') && !str.includes('"content":""')) {
+            streamHasContent = true
+          }
+          banWatchStream.write(chunk)
+        })
+
+        transformedStream.once('error', (err) => banWatchStream.destroy(err))
+
+        transformedStream.once('end', () => {
+          if (!streamHasContent) {
+            console.warn('[Venice] Stream ban detected: stream ended with no content — triggering account switch')
+            storeManager.addLog('warn', '[Venice] Stream ban detected: empty content signature, triggering account switch', {
+              providerId: provider.id,
+              accountId: account.id,
+              model: request.model,
+            })
+            banWatchStream.destroy(new Error('Venice account banned: feature monitoring detected (empty stream)'))
+            return
+          }
+          if (deleteSessionCallback) {
+            deleteSessionCallback()
+          }
+          banWatchStream.end()
+        })
+
+        return {
+          success: true,
+          status: response.status,
+          headers: this.extractHeaders(response.headers),
+          stream: banWatchStream,
+          skipTransform: true,
+          latency,
+          providerSessionId: '',
+        }
+      }
+
+      // Non-streaming: collect stream data and convert
+      const handler = new VeniceStreamHandler(actualModel)
+      const result = await this.handleVeniceNonStream(stream, handler)
+
+      this.applyToolCallsToResponse(result, transformed)
+
+      return {
+        success: true,
+        status: response.status,
+        headers: this.extractHeaders(response.headers),
+        body: result,
+        latency,
+        providerSessionId: '',
+      }
+    } catch (error) {
+      const latency = Date.now() - startTime
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        latency,
+      }
+    }
+  }
+
+  /**
+   * Handle Venice streaming response
+   */
+  private async handleVeniceStream(
+    stream: Readable,
+    handler: VeniceStreamHandler
+  ): Promise<Readable> {
+    const outputStream = new PassThrough()
+
+    ;(async () => {
+      try {
+        for await (const chunk of stream) {
+          const chunkStr = chunk.toString()
+          const events = handler.processChunk(chunkStr)
+
+          for (const event of events) {
+            if (event.type === 'content' || event.type === 'reasoning') {
+              outputStream.write(`data: ${JSON.stringify(event.data)}\n\n`)
+            }
+          }
+        }
+
+        // Finalize
+        const finalEvents = handler.finalize()
+        for (const event of finalEvents) {
+          if (event.type === 'content' || event.type === 'reasoning' || event.type === 'done') {
+            outputStream.write(`data: ${JSON.stringify(event.data)}\n\n`)
+          }
+        }
+
+        outputStream.write('data: [DONE]\n\n')
+        outputStream.end()
+      } catch (error) {
+        console.error('[Venice] Stream handling error:', error)
+        outputStream.destroy(error instanceof Error ? error : new Error(String(error)))
+      }
+    })()
+
+    return outputStream
+  }
+
+  /**
+   * Handle Venice non-streaming response
+   */
+  private async handleVeniceNonStream(
+    stream: Readable,
+    handler: VeniceStreamHandler
+  ): Promise<any> {
+    let fullContent = ''
+    let fullReasoning = ''
+
+    for await (const chunk of stream) {
+      const chunkStr = chunk.toString()
+      const events = handler.processChunk(chunkStr)
+
+      for (const event of events) {
+        if (event.type === 'content' && event.data?.choices?.[0]?.delta?.content) {
+          fullContent += event.data.choices[0].delta.content
+        } else if (event.type === 'reasoning' && event.data?.choices?.[0]?.delta?.reasoning_content) {
+          fullReasoning += event.data.choices[0].delta.reasoning_content
+        }
+      }
+    }
+
+    // Finalize
+    const finalEvents = handler.finalize()
+    for (const event of finalEvents) {
+      if (event.type === 'content' && event.data?.choices?.[0]?.delta?.content) {
+        fullContent += event.data.choices[0].delta.content
+      } else if (event.type === 'reasoning' && event.data?.choices?.[0]?.delta?.reasoning_content) {
+        fullReasoning += event.data.choices[0].delta.reasoning_content
+      }
+    }
+
+    return {
+      id: handler['completionId'],
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: handler['model'],
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: fullContent,
+          ...(fullReasoning ? { reasoning_content: fullReasoning } : {}),
+        },
+        finish_reason: 'stop',
+      }],
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      },
+    }
   }
 
   /**

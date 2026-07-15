@@ -256,6 +256,19 @@ export interface AccountSelection {
 }
 
 /**
+ * Venice SSE Event
+ */
+export interface VeniceStreamEvent {
+  kind: 'meta' | 'content'
+  content?: string
+  reasoning_content?: string
+  references?: any[]
+  servingModelId?: string
+  completion_id?: string
+  augmented?: boolean
+}
+
+/**
  * SSE Event
  */
 export interface SSEEvent {

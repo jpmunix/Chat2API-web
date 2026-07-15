@@ -22,7 +22,7 @@ router.get('/models', async (ctx: Context) => {
 
   for (const provider of providers) {
     const accounts = storeManager.getAccountsByProviderId(provider.id)
-      .filter(account => account.status === 'active')
+      .filter(account => account.status !== 'inactive' && account.status !== 'expired')
 
     if (accounts.length === 0) {
       continue
@@ -88,7 +88,7 @@ router.get('/models/:model', async (ctx: Context) => {
 
   for (const provider of providers) {
     const accounts = storeManager.getAccountsByProviderId(provider.id)
-      .filter(account => account.status === 'active')
+      .filter(account => account.status !== 'inactive' && account.status !== 'expired')
 
     if (accounts.length === 0) {
       continue

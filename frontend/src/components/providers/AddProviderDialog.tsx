@@ -26,6 +26,7 @@ import minimaxIcon from '@/assets/providers/minimax.svg'
 import perplexityIcon from '@/assets/providers/perplexity.svg'
 import qwenIcon from '@/assets/providers/qwen.svg'
 import zaiIcon from '@/assets/providers/zai.svg'
+import veniceIcon from '@/assets/providers/venice.png'
 
 interface AddProviderDialogProps {
   open: boolean
@@ -54,6 +55,7 @@ const providerIcons: Record<string, string> = {
   perplexity: perplexityIcon,
   qwen: qwenIcon,
   'qwen-ai': qwenIcon,
+  venice: veniceIcon,
   zai: zaiIcon,
 }
 

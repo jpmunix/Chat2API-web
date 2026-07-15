@@ -33,6 +33,7 @@ import perplexityIcon from '@/assets/providers/perplexity.svg'
 import qwenIcon from '@/assets/providers/qwen.svg'
 import zaiIcon from '@/assets/providers/zai.svg'
 import mimoIcon from '@/assets/providers/mimo.svg'
+import veniceIcon from '@/assets/providers/venice.png'
 
 const providerIcons: Record<string, string> = {
   deepseek: deepseekIcon,
@@ -43,6 +44,7 @@ const providerIcons: Record<string, string> = {
   perplexity: perplexityIcon,
   qwen: qwenIcon,
   'qwen-ai': qwenIcon,
+  venice: veniceIcon,
   zai: zaiIcon,
 }
 

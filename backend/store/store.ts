@@ -167,7 +167,7 @@ export class StoreManager {
    */
   private getStoragePath(): string {
     const envPath = process.env.CHAT2API_DATA_DIR
-    const resolved = envPath || join(homedir(), '.chat2api')
+    const resolved = envPath || join(homedir(), '.config', 'chat2api')
     // Log once for debugging path issues
     if (!this.isInitialized) {
       console.log(`[Store] CHAT2API_DATA_DIR env: ${envPath || '(not set)'}`)

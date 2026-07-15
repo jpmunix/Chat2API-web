@@ -237,6 +237,13 @@ export class AccountManager {
       if (result.accountInfo?.email) {
         storeManager.updateAccount(id, { email: result.accountInfo.email })
       }
+
+      // If Venice JWT was auto-refreshed during validation, persist the new token
+      if (result.refreshedJwt) {
+        const updatedCredentials = { ...account.credentials, jwt: result.refreshedJwt }
+        storeManager.updateAccount(id, { credentials: updatedCredentials })
+        console.log(`[AccountManager] Persisted refreshed Venice JWT for account ${account.name} (${id})`)
+      }
     } else {
       this.updateStatus(id, 'error', result.error)
     }

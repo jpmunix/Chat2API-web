@@ -583,6 +583,8 @@ export interface ValidationResult {
     used?: number
     expiresAt?: number
   }
+  /** If a Venice JWT was auto-refreshed during validation, the new JWT to persist */
+  refreshedJwt?: string
 }
 
 /**

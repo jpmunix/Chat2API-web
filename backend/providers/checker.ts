@@ -2,6 +2,7 @@ import axios, { AxiosError } from 'axios'
 import { getBuiltinProvider } from './builtin'
 import type { Provider, ProviderCheckResult, Account } from '../shared/types'
 import type { BuiltinProviderConfig } from '../store/types'
+import * as refreshVeniceModule from './venice-refresh'
 
 const CHECK_TIMEOUT = 15000
 
@@ -14,6 +15,8 @@ export interface TokenCheckResult {
     quota?: number
     used?: number
   }
+  /** If the token was auto-refreshed during validation, the new JWT */
+  refreshedJwt?: string
 }
 
 export class ProviderChecker {
@@ -152,11 +155,198 @@ export class ProviderChecker {
           account.credentials.user_id,
           account.credentials.ph_token
         )
+      case 'venice':
+        return this.checkVeniceToken(account.credentials)
       default:
         if (!builtinConfig.tokenCheckEndpoint) {
           return { valid: true }
         }
         return this.checkGenericToken(builtinConfig, account)
+    }
+  }
+
+  /**
+   * Validate Venice AI token/session
+   * First checks JWT expiry locally, then hits /api/app/models to verify the session works.
+   */
+  /**
+   * Refresh Venice JWT by delegating to the shared refresh module.
+   */
+  private static async refreshVeniceJWT(
+    expiredJwt: string,
+    cookies: string,
+  ): Promise<string | null> {
+    return refreshVeniceModule.refreshVeniceJWT('checker', expiredJwt, cookies)
+  }
+
+  /**
+   * Validate Venice AI token/session.
+   * First checks JWT expiry locally. If expired, it tries to refresh via the
+   * Clerk token endpoint, then hits /api/inference/rate-limits to verify the
+   * session works.
+   */
+  private static async checkVeniceToken(credentials: Record<string, string>): Promise<TokenCheckResult> {
+    const log = (msg: string, ...args: any[]) => console.log(`[Venice-Validate] ${msg}`, ...args)
+    const logError = (msg: string, ...args: any[]) => console.error(`[Venice-Validate] ${msg}`, ...args)
+
+    try {
+      let jwt = credentials.jwt || credentials.token || ''
+      const cookies = credentials.cookies || credentials.cookie || ''
+      const distinctId = credentials.distinctId || credentials['x-venice-distinct-id'] || ''
+      const locale = credentials.locale || credentials['x-venice-locale'] || 'en'
+      const middlefaceVersion = credentials.middlefaceVersion || credentials['x-venice-middleface-version'] || '0.1.890'
+      const version = credentials.version || credentials['x-venice-version'] || 'interface@20260715.003824+7020d35'
+
+      log('=== Starting Venice token validation ===')
+      log('Credential keys:', Object.keys(credentials))
+      log('JWT length:', jwt.length, '| JWT preview:', jwt.slice(0, 50) + '...')
+      log('Cookies length:', cookies.length, '| Cookies preview:', cookies.slice(0, 80) + '...')
+      log('distinctId:', distinctId || '(empty)')
+      log('locale:', locale, '| middlefaceVersion:', middlefaceVersion, '| version:', version)
+
+      if (!jwt) {
+        logError('No JWT found in credentials. Available keys:', Object.keys(credentials))
+        return { valid: false, error: 'JWT Token is required' }
+      }
+      if (!cookies) {
+        logError('No cookies found in credentials. Available keys:', Object.keys(credentials))
+        return { valid: false, error: 'Session cookies are required' }
+      }
+
+      // 1. Local JWT expiry check — if expired, try refresh before failing
+      let jwtPayload: Record<string, any> = {}
+      let jwtExpired = false
+      try {
+        const parts = jwt.split('.')
+        if (parts.length !== 3) {
+          logError('JWT has', parts.length, 'parts instead of 3')
+          return { valid: false, error: 'Invalid JWT format' }
+        }
+        let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+        const padding = payload.length % 4
+        if (padding > 0) payload += '='.repeat(4 - padding)
+        jwtPayload = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+        
+        const now = Math.floor(Date.now() / 1000)
+        log('JWT payload parsed. sub:', jwtPayload.sub, '| exp:', jwtPayload.exp, '| now:', now)
+        log('JWT expires:', jwtPayload.exp ? new Date(jwtPayload.exp * 1000).toISOString() : 'unknown')
+        
+        if (jwtPayload.exp && jwtPayload.exp < now) {
+          jwtExpired = true
+          log('⚠️ JWT EXPIRED! Exp:', new Date(jwtPayload.exp * 1000).toISOString(), 'Now:', new Date(now * 1000).toISOString())
+          log('JWT expired, attempting Clerk token refresh...')
+        } else {
+          log('JWT expiry check PASSED')
+        }
+      } catch (e) {
+        log('JWT parse failed (non-critical, will try API):', (e as Error).message)
+      }
+
+      // If JWT expired, try to refresh it via Clerk token endpoint
+      let refreshedJwt: string | null = null
+      if (jwtExpired) {
+        refreshedJwt = await this.refreshVeniceJWT(jwt, cookies)
+        if (refreshedJwt) {
+          jwt = refreshedJwt
+          // Re-parse the new JWT to get updated payload
+          try {
+            const parts = jwt.split('.')
+            let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+            const padding = payload.length % 4
+            if (padding > 0) payload += '='.repeat(4 - padding)
+            jwtPayload = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+            log('Using refreshed JWT. New exp:', jwtPayload.exp ? new Date(jwtPayload.exp * 1000).toISOString() : 'unknown')
+          } catch {
+            // Use existing jwtPayload
+          }
+        } else {
+          logError('❌ JWT refresh failed. Cannot validate with expired token.')
+          return { valid: false, error: 'JWT token has expired and refresh failed. Please re-capture your Venice session.' }
+        }
+      }
+
+      // 2. Verify by hitting the rate-limits endpoint (most reliable)
+      const requestTimestamp = Date.now()
+      const requestHeaders: Record<string, string> = {
+        'accept': 'application/json, text/plain, */*',
+        'authorization': `Bearer ${jwt}`,
+        'cookie': cookies,
+        'cache-control': 'no-cache',
+        'pragma': 'no-cache',
+        'origin': 'https://venice.ai',
+        'referer': 'https://venice.ai/',
+        'sec-ch-ua': '"Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Linux"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'x-venice-distinct-id': distinctId,
+        'x-venice-locale': locale,
+        'x-venice-middleface-version': middlefaceVersion,
+        'x-venice-request-timestamp-ms': String(requestTimestamp),
+        'x-venice-version': version,
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+      }
+
+      log('Calling GET https://outerface.venice.ai/api/inference/rate-limits')
+
+      const response = await axios.get(
+        'https://outerface.venice.ai/api/inference/rate-limits',
+        {
+          headers: requestHeaders,
+          timeout: CHECK_TIMEOUT,
+          validateStatus: () => true,
+        }
+      )
+
+      const elapsed = Date.now() - requestTimestamp
+      log('Response received in', elapsed, 'ms')
+      log('HTTP Status:', response.status)
+      log('Response data:', JSON.stringify(response.data).slice(0, 500))
+
+      if (response.status === 200 && response.data && typeof response.data.chat !== 'undefined') {
+        const username = jwtPayload.sub || 'Venice User'
+        log('✅ Validation PASSED for user:', username)
+        return {
+          valid: true,
+          userInfo: {
+            name: username,
+            email: jwtPayload.sub || username,
+          },
+          // Propagate the refreshed JWT so it can be persisted
+          ...(refreshedJwt ? { refreshedJwt } : {}),
+        }
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        logError('❌ Authentication failed (HTTP', response.status, ')')
+        return { valid: false, error: 'Authentication failed: JWT or cookies may be expired' }
+      }
+
+      logError('❌ Validation failed. Status:', response.status)
+      logError('Response body:', JSON.stringify(response.data).slice(0, 300))
+      return { 
+        valid: false, 
+        error: `API validation failed (HTTP ${response.status}): ${typeof response.data === 'string' ? response.data.slice(0, 100) : JSON.stringify(response.data).slice(0, 100)}` 
+      }
+    } catch (error) {
+      logError('❌ Exception during validation:', error instanceof Error ? error.message : error)
+      if (error instanceof AxiosError) {
+        logError('Axios error details:', error.code, error.message)
+        if (error.response) {
+          logError('Response status:', error.response.status)
+          logError('Response data:', JSON.stringify(error.response.data).slice(0, 300))
+        }
+        if (error.config) {
+          logError('Request URL:', error.config.url)
+          logError('Request headers:', JSON.stringify(error.config.headers, (k, v) => k === 'cookie' ? v.slice(0, 50) + '...' : k === 'authorization' ? 'Bearer ***' : v, 2))
+        }
+      }
+      return {
+        valid: false,
+        error: error instanceof AxiosError ? error.message : 'Connection failed',
+      }
     }
   }
 

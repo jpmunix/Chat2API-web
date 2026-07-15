@@ -401,6 +401,7 @@ export async function validateCredentials(
       error: result.error,
       validatedAt: Date.now(),
       accountInfo: result.userInfo,
+      ...(result.refreshedJwt ? { refreshedJwt: result.refreshedJwt } : {}),
     }
   }
   
