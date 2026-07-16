@@ -123,7 +123,7 @@ export interface AppConfig {
   toolPromptConfig?: LegacyToolPromptConfig
   managementApi: ManagementApiConfig
   contextManagement?: unknown
-  language: 'zh-CN' | 'en-US'
+  language: 'es-ES' | 'zh-CN' | 'en-US'
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'

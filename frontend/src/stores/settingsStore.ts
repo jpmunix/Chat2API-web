@@ -5,7 +5,7 @@ import type { AppConfig } from '@shared/types'
 import i18n from '@/i18n'
 
 export type Theme = 'light' | 'dark' | 'system'
-export type Language = 'zh-CN' | 'en-US'
+export type Language = 'es-ES' | 'zh-CN' | 'en-US'
 export type CloseBehavior = 'minimize' | 'close' | 'ask'
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 export type OAuthProxyMode = 'system' | 'none'

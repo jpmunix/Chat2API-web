@@ -4,7 +4,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { cn } from '@/lib/utils'
 import logoIcon from '@/assets/icons/icons.png'
 import { useEffect, useState } from 'react'
-import { useSettingsStore } from '@/stores/settingsStore'
+import { useSettingsStore, Language } from '@/stores/settingsStore'
 
 export function Header() {
   const { t } = useTranslation()
@@ -47,7 +47,9 @@ export function Header() {
   }
 
   const toggleLanguage = () => {
-    setLanguage(language === 'zh-CN' ? 'en-US' : 'zh-CN')
+    const cycle: Language[] = ['es-ES', 'en-US', 'zh-CN']
+    const idx = cycle.indexOf(language)
+    setLanguage(cycle[(idx + 1) % cycle.length])
   }
 
   return (
@@ -92,7 +94,11 @@ export function Header() {
         <button
           onClick={toggleLanguage}
           className="w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-300 group"
-          title={language === 'zh-CN' ? t('header.switchToEnglish') : t('header.switchToChinese')}
+          title={
+            language === 'es-ES' ? t('header.switchToEnglish') :
+            language === 'en-US' ? t('header.switchToChinese') :
+            t('header.switchToSpanish')
+          }
         >
           <Languages className="h-4 w-4 text-[var(--text-primary)] group-hover:text-[var(--accent-primary)]" />
         </button>

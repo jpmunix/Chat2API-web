@@ -1,6 +1,7 @@
 {
   "header": {
     "switchToEnglish": "Switch to English",
+    "switchToSpanish": "Switch to Spanish",
     "switchToChinese": "Switch to Chinese"
   },
   "app": {
@@ -648,6 +649,7 @@
     "languageSettingsDesc": "Set the display language of the application",
     "displayLanguage": "Display Language",
     "selectLanguage": "Select application interface language",
+    "languageEs": "Español",
     "languageZh": "简体中文",
     "languageEn": "English",
     "sidebar": "Sidebar",

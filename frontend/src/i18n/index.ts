@@ -1,15 +1,19 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 
-import zhCN from './locales/zh-CN.json'
+import esES from './locales/es-ES.json'
 import enUS from './locales/en-US.json'
+import zhCN from './locales/zh-CN.json'
 
 const resources = {
-  'zh-CN': {
-    translation: zhCN,
+  'es-ES': {
+    translation: esES,
   },
   'en-US': {
     translation: enUS,
+  },
+  'zh-CN': {
+    translation: zhCN,
   },
 }
 
@@ -24,7 +28,7 @@ function getInitialLanguage(): string {
     if (stored) {
       const parsed = JSON.parse(stored)
       const lang = parsed?.state?.language
-      if (lang === 'zh-CN' || lang === 'en-US') {
+      if (lang === 'es-ES' || lang === 'en-US' || lang === 'zh-CN') {
         return lang
       }
     }
@@ -35,6 +39,7 @@ function getInitialLanguage(): string {
   // Fallback: detect from browser navigator
   const navLang = navigator.language || ''
   if (navLang.startsWith('zh')) return 'zh-CN'
+  if (navLang.startsWith('es')) return 'es-ES'
   return 'en-US'
 }
 

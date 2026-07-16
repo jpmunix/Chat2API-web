@@ -54,7 +54,7 @@ export function BookmarkletPanel({
   const [phase, setPhase] = useState<Phase>('idle')
   const [bookmarkletHref, setBookmarkletHref] = useState('')
   const [expectedOrigin, setExpectedOrigin] = useState('')
-  const [ticket, setTicket] = useState('')
+  const [_ticket, setTicket] = useState('')
   const [error, setError] = useState('')
   const [expiresAt, setExpiresAt] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)

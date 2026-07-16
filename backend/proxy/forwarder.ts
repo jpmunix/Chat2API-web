@@ -1564,7 +1564,7 @@ export class RequestForwarder {
             }
           : undefined
 
-        const handler = new VeniceStreamHandler(actualModel)
+        const handler = new VeniceStreamHandler(actualModel, transformed.plan)
         const transformedStream = await this.handleVeniceStream(stream, handler)
 
         // Wrap stream to detect ban signature
@@ -1650,7 +1650,7 @@ export class RequestForwarder {
           const events = handler.processChunk(chunkStr)
 
           for (const event of events) {
-            if (event.type === 'content' || event.type === 'reasoning') {
+            if (event.type === 'content' || event.type === 'reasoning' || event.type === 'tool_call') {
               outputStream.write(`data: ${JSON.stringify(event.data)}\n\n`)
             }
           }
@@ -1659,7 +1659,7 @@ export class RequestForwarder {
         // Finalize
         const finalEvents = handler.finalize()
         for (const event of finalEvents) {
-          if (event.type === 'content' || event.type === 'reasoning' || event.type === 'done') {
+          if (event.type === 'content' || event.type === 'reasoning' || event.type === 'tool_call' || event.type === 'done') {
             outputStream.write(`data: ${JSON.stringify(event.data)}\n\n`)
           }
         }

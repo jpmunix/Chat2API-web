@@ -39,6 +39,10 @@ const profiles: Record<string, ProviderToolProfile> = {
     providerId: 'qwen',
     ...chat2ApiXmlHistoryProfile,
   },
+  venice: {
+    providerId: 'venice',
+    ...chat2ApiXmlHistoryProfile,
+  },
 }
 
 export function getProviderToolProfile(providerId: string): ProviderToolProfile {

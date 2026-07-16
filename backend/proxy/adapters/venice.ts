@@ -10,6 +10,9 @@ import { Account, Provider } from '../../store/types'
 import type { ChatCompletionRequest, ForwardResult, VeniceStreamEvent } from '../types'
 import { isJWTExpired, refreshVeniceJWT, invalidateCache } from '../../providers/venice-refresh'
 import { storeManager } from '../../store/store'
+import { createBaseChunk } from '../utils/streamToolHandler'
+import { ToolStreamParser } from '../toolCalling/ToolStreamParser'
+import type { ToolCallingPlan } from '../toolCalling/types'
 
 const VENICE_API_BASE = 'https://outerface.venice.ai/api'
 const VENICE_CHAT_ENDPOINT = `${VENICE_API_BASE}/inference/chat`
@@ -336,17 +339,19 @@ export class VeniceStreamHandler {
   private completionId: string = ''
   private modelId: string = ''
   private hasSentReasoning = false
+  private toolStreamParser?: ToolStreamParser
 
-  constructor(private model: string) {
+  constructor(private model: string, toolCallingPlan?: ToolCallingPlan) {
     this.completionId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    this.toolStreamParser = toolCallingPlan?.shouldParseResponse ? new ToolStreamParser(toolCallingPlan) : undefined
   }
 
   /**
    * Process a chunk of Venice NDJSON or SSE data and yield OpenAI-compatible chunks
    */
-  processChunk(chunk: string): Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> {
+  processChunk(chunk: string): Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> {
     this.buffer += chunk
-    const results: Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> = []
+    const results: Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> = []
 
     // Split by newline (NDJSON separator)
     const lines = this.buffer.split('\n')
@@ -388,8 +393,8 @@ export class VeniceStreamHandler {
     return results
   }
 
-  private processVeniceEvent(event: VeniceStreamEvent): Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> {
-    const results: Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> = []
+  private processVeniceEvent(event: VeniceStreamEvent): Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> {
+    const results: Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> = []
 
     switch (event.kind) {
       case 'meta':
@@ -403,9 +408,8 @@ export class VeniceStreamHandler {
 
       case 'content':
         if (event.reasoning_content) {
-          // Reasoning token
+          // Reasoning token — pass through (tool calls don't appear in reasoning)
           if (!this.hasSentReasoning) {
-            // Send reasoning start marker if needed
             this.hasSentReasoning = true
           }
           results.push({
@@ -425,7 +429,33 @@ export class VeniceStreamHandler {
             },
           })
         } else if (event.content) {
-          // Regular content token
+          // Regular content token — pipe through ToolStreamParser if active
+          if (this.toolStreamParser) {
+            const baseChunk = createBaseChunk(this.completionId, this.model, Math.floor(Date.now() / 1000))
+            const chunks = this.toolStreamParser.push(event.content, baseChunk, this.isFirstChunk)
+
+            for (const chunk of chunks) {
+              const delta = chunk.choices?.[0]?.delta
+              if (delta?.tool_calls) {
+                results.push({ type: 'tool_call', data: chunk })
+              } else if (delta?.content !== undefined) {
+                results.push({ type: 'content', data: chunk })
+              }
+              this.isFirstChunk = false
+            }
+
+            // If buffering a tool call or already emitted tool calls, don't emit raw content
+            if (this.toolStreamParser.isBuffering() || this.toolStreamParser.hasEmittedToolCall()) {
+              break
+            }
+
+            // If parser returned chunks, content was already handled
+            if (chunks.length > 0) {
+              break
+            }
+          }
+
+          // No tool parser or parser passed through — emit as regular content
           results.push({
             type: 'content',
             data: {
@@ -442,6 +472,7 @@ export class VeniceStreamHandler {
               }],
             },
           })
+          this.isFirstChunk = false
         }
         break
 
@@ -455,8 +486,8 @@ export class VeniceStreamHandler {
   /**
    * Process any remaining buffer and send final chunk
    */
-  finalize(): Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> {
-    const results: Array<{ type: 'content' | 'reasoning' | 'done' | 'error'; data?: any }> = []
+  finalize(): Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> {
+    const results: Array<{ type: 'content' | 'reasoning' | 'tool_call' | 'done' | 'error'; data?: any }> = []
 
     // Process any remaining buffer
     if (this.buffer.trim()) {
@@ -474,6 +505,23 @@ export class VeniceStreamHandler {
       }
     }
 
+    // Flush any remaining tool call buffer
+    if (this.toolStreamParser) {
+      const baseChunk = createBaseChunk(this.completionId, this.model, Math.floor(Date.now() / 1000))
+      const flushChunks = this.toolStreamParser.flush(baseChunk)
+      for (const chunk of flushChunks) {
+        const delta = chunk.choices?.[0]?.delta
+        if (delta?.tool_calls) {
+          results.push({ type: 'tool_call', data: chunk })
+        } else if (delta?.content !== undefined) {
+          results.push({ type: 'content', data: chunk })
+        }
+      }
+    }
+
+    // Determine finish_reason based on whether tool calls were emitted
+    const finishReason = this.toolStreamParser?.hasEmittedToolCall() ? 'tool_calls' : 'stop'
+
     // Send final done chunk
     results.push({
       type: 'done',
@@ -485,7 +533,7 @@ export class VeniceStreamHandler {
         choices: [{
           index: 0,
           delta: {},
-          finish_reason: 'stop',
+          finish_reason: finishReason,
         }],
       },
     })

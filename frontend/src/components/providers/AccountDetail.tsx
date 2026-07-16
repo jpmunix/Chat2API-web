@@ -118,7 +118,7 @@ export function AccountDetail({
 
   const formatDate = (timestamp?: number) => {
     if (!timestamp) return '-'
-    return new Date(timestamp).toLocaleString('zh-CN', {
+    return new Date(timestamp).toLocaleString('es-ES', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

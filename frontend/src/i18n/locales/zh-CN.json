@@ -1,7 +1,8 @@
 {
   "header": {
     "switchToEnglish": "Switch to English",
-    "switchToChinese": "切换到中文"
+    "switchToChinese": "切换到中文",
+    "switchToSpanish": "切换到西班牙语"
   },
   "app": {
     "name": "Chat2API",
@@ -648,6 +649,7 @@
     "languageSettingsDesc": "设置应用程序的显示语言",
     "displayLanguage": "显示语言",
     "selectLanguage": "选择应用程序的界面语言",
+    "languageEs": "Español",
     "languageZh": "简体中文",
     "languageEn": "English",
     "sidebar": "侧边栏",

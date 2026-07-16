@@ -75,6 +75,7 @@ export function AppearanceSettings() {
                 <SelectValue placeholder={t('settings.language')} />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="es-ES">{t('settings.languageEs')}</SelectItem>
                 <SelectItem value="zh-CN">{t('settings.languageZh')}</SelectItem>
                 <SelectItem value="en-US">{t('settings.languageEn')}</SelectItem>
               </SelectContent>
